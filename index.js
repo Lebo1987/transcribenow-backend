@@ -16,7 +16,7 @@ const UPLOADS_DIR = path.resolve(__dirname, 'uploads');
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
 // Initialize OpenAI client (placeholder for future use)
-const openai = new OpenAI({
+const client = new OpenAI({
 	apiKey: process.env.OPENAI_API_KEY
 });
 
@@ -56,30 +56,45 @@ app.get('/health', (req, res) => {
 app.post('/api/transcribe', upload.single('file'), async (req, res) => {
 	try {
 		if (!req.file) {
-			return res.status(400).json({
-				ok: false,
-				error: 'No file uploaded. Expect field "file".'
-			});
+			return res.status(400).json({ error: 'No file uploaded' });
 		}
 
-		const { originalname, mimetype, size } = req.file;
+		const filePath = req.file.path;
 
-		// Placeholder: Whisper transcription and GPT summary logic will be added later
-		return res.status(200).json({
-			ok: true,
-			message: 'Demo mode – file received',
-			file: {
-				name: originalname,
-				type: mimetype,
-				size
-			},
-			transcript: 'demo transcript',
-			summary: 'demo summary'
+		// --- שלב 1: תמלול אמיתי עם Whisper ---
+		const transcription = await client.audio.transcriptions.create({
+			file: filePath,
+			model: "whisper-1"
 		});
+
+		const text = transcription.text;
+
+		// --- שלב 2: סיכום אמיתי עם GPT ---
+		const summaryCompletion = await client.chat.completions.create({
+			model: "gpt-4o",
+			messages: [
+				{
+					role: "system",
+					content: "Summarize the provided transcription clearly and concisely."
+				},
+				{
+					role: "user",
+					content: text
+				}
+			]
+		});
+
+		const summary = summaryCompletion.choices[0].message.content;
+
+		res.json({
+			success: true,
+			transcript: text,
+			summary: summary
+		});
+
 	} catch (err) {
-		// eslint-disable-next-line no-console
-		console.error('Error in /api/transcribe:', err);
-		return res.status(500).json({ ok: false, error: 'Internal server error' });
+		console.error("Error in /api/transcribe:", err);
+		return res.status(500).json({ error: "Internal Server Error" });
 	}
 });
 
