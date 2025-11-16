@@ -7,13 +7,11 @@ const cors = require('cors');
 const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
-const OpenAI = require('openai');
+const axios = require('axios');
+const FormData = require('form-data');
+const util = require('util');
 
 const PORT = process.env.PORT || 3001;
-
-const client = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
-});
 
 // store uploaded file temporarily on disk
 const upload = multer({ dest: "uploads/" });
@@ -22,7 +20,22 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-app.post("/api/transcribe", upload.single("file"), async (req, res) => {
+app.post(
+    "/api/transcribe",
+    // Pre-multer debug logging (does not change logic)
+    (req, res, next) => {
+        console.log("=== PRE-MULTER DEBUG ===");
+        console.log("METHOD/URL:", req.method, req.originalUrl);
+        console.log("HEADERS:", req.headers);
+        try {
+            console.log("REQ (inspect):", util.inspect(req, { depth: 2 }));
+        } catch (e) {
+            console.log("REQ inspect failed:", e?.message);
+        }
+        next();
+    },
+    upload.single("file"),
+    async (req, res) => {
     try {
         console.log("====== DEBUG START ======");
         console.log("REQ.FILE INFO:", {
@@ -32,38 +45,43 @@ app.post("/api/transcribe", upload.single("file"), async (req, res) => {
             mimetype: req.file?.mimetype,
             size: req.file?.size,
         });
+        console.log("REQ.BODY:", req.body);
+        try {
+            console.log("POST-MULTER REQ (inspect):", util.inspect(req, { depth: 2 }));
+        } catch (e) {
+            console.log("POST-MULTER inspect failed:", e?.message);
+        }
 
-        if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+        if (!req.file) {
+            console.log("req.file is undefined — FULL HEADERS:", req.headers);
+            return res.status(400).json({ error: "No file uploaded" });
+        }
 
         // full path to temp file
         const filePath = path.resolve(req.file.path);
 
-        console.log("====== SENDING TO OPENAI (4o AUDIO) ======");
+        console.log("====== SENDING TO OPENAI (Whisper via axios) ======");
+        const formData = new FormData();
+        formData.append("file", fs.createReadStream(filePath));
+        formData.append("model", "whisper-1");
 
-        // NEW 4O AUDIO MODEL — FIX
-        const transcription = await client.audio.transcriptions.create({
-            file: fs.createReadStream(filePath),
-            model: "gpt-4o-audio-preview",
-        });
+        const response = await axios.post(
+            "https://api.openai.com/v1/audio/transcriptions",
+            formData,
+            {
+                headers: {
+                    ...formData.getHeaders(),
+                    Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+                },
+            }
+        );
 
-        console.log("Transcription done.");
+        console.log("Transcription done (axios).");
 
         // cleanup temp file
         fs.unlink(filePath, () => {});
 
-        // GPT summary
-        const summary = await client.chat.completions.create({
-            model: "gpt-4o-mini",
-            messages: [
-                { role: "system", content: "Summarize the transcription concisely." },
-                { role: "user", content: transcription.text }
-            ]
-        });
-
-        return res.json({
-            text: transcription.text,
-            summary: summary.choices[0].message.content
-        });
+        return res.json({ text: response.data.text });
 
     } catch (err) {
         console.log("====== OPENAI ERROR ======");
